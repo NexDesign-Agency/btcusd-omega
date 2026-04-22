@@ -103,6 +103,7 @@ interface MarketAnalysis {
 export default function App() {
   const [loading, setLoading] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [countdown, setCountdown] = useState(5);
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL" | "CHAT">("SIGNAL");
@@ -111,6 +112,27 @@ export default function App() {
   
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
   useTradingView("tv_chart_container", !showSplash);
+
+  const enterTerminal = () => {
+    setShowSplash(false);
+    speakMessage("Welcome to BTC USD Signal Omega. Terminal system is now active.");
+  };
+
+  // Auto-enter timer
+  useEffect(() => {
+    if (!showSplash) return;
+    
+    if (countdown <= 0) {
+      enterTerminal();
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setCountdown((prev) => prev - 1);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [showSplash, countdown]);
 
   const speakMessage = (text: string) => {
     if (!window.speechSynthesis) return;
@@ -349,15 +371,18 @@ export default function App() {
 
               {/* CTA - Moved Up */}
               <button 
-                onClick={() => {
-                  setShowSplash(false);
-                  speakMessage("Welcome to BTC USD Signal Omega. Terminal system is now active.");
-                }}
-                className="group relative w-full md:w-fit px-8 md:px-12 py-5 border-2 border-bull text-bull hover:bg-bull hover:text-black font-black text-lg md:text-xl italic tracking-widest rounded-xl transition-all active:scale-95 overflow-hidden shadow-[0_0_30px_rgba(0,255,136,0.2)] mb-20 md:mb-24"
+                onClick={enterTerminal}
+                className="group relative w-full md:w-fit px-8 md:px-12 py-5 border-2 border-bull text-bull hover:bg-bull hover:text-black font-black text-lg md:text-xl italic tracking-widest rounded-xl transition-all active:scale-95 overflow-hidden shadow-[0_0_30px_rgba(0,255,136,0.2)] mb-2 md:mb-4"
               >
                 <div className="absolute inset-0 bg-bull/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                 ENTER TERMINAL
               </button>
+              
+              {/* Countdown Indicator */}
+              <div className="flex items-center gap-2 mb-10 md:mb-16">
+                <span className="text-[10px] font-bold text-white/40 tracking-widest uppercase">Auto-redirecting in</span>
+                <span className="w-5 h-5 flex items-center justify-center bg-bull/20 rounded border border-bull/30 text-bull font-mono text-xs font-bold">{countdown}s</span>
+              </div>
 
               {/* Feature List - Moved Down */}
               <div className="space-y-6 md:space-y-8">
