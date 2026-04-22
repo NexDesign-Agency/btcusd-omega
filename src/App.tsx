@@ -19,14 +19,12 @@ import {
   Target,
   ShieldCheck,
   ChevronLeft,
-  ChevronRight,
-  Trash2,
-  Maximize2
+  ChevronRight
 } from "lucide-react";
 import { BTC_ANALYST_SYSTEM_PROMPT } from "./constants";
 
 // TradingView widget script loader
-const useTradingView = (containerId: string, isActive: boolean, hideToolbar: boolean, refreshKey: number) => {
+const useTradingView = (containerId: string, isActive: boolean, hideToolbar: boolean) => {
   useEffect(() => {
     if (!isActive) return;
 
@@ -81,7 +79,7 @@ const useTradingView = (containerId: string, isActive: boolean, hideToolbar: boo
         return () => clearInterval(interval);
       }
     }
-  }, [containerId, isActive, hideToolbar, refreshKey]);
+  }, [containerId, isActive, hideToolbar]);
 };
 
 interface TimeframeData {
@@ -112,7 +110,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [showChartToolbar, setShowChartToolbar] = useState(false);
-  const [chartRefreshKey, setChartRefreshKey] = useState(0);
   const [countdown, setCountdown] = useState(5);
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
@@ -121,7 +118,7 @@ export default function App() {
   const [input, setInput] = useState("");
   
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-  useTradingView("tv_chart_container", !showSplash, !showChartToolbar, chartRefreshKey);
+  useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
 
   const enterTerminal = () => {
     setShowSplash(false);
@@ -345,10 +342,6 @@ export default function App() {
     return "text-warning border-warning/20 bg-warning/5";
   };
 
-  const resetChart = () => {
-    setChartRefreshKey(prev => prev + 1);
-  };
-
   if (showSplash) {
     return (
       <div className="min-h-[100dvh] w-screen bg-[#05070a] text-white flex flex-col relative overflow-hidden font-sans select-none">
@@ -508,10 +501,10 @@ export default function App() {
       </header>
 
       {/* Main Dashboard Layout */}
-      <main className="flex-1 overflow-hidden grid grid-cols-12 gap-0 relative pb-16 lg:pb-0">
+      <main className="flex-1 flex flex-col overflow-hidden relative">
         
         {/* Top Timeframe Strip */}
-        <div className="col-span-12 h-20 border-b border-trading-border flex flex-nowrap overflow-x-auto no-scrollbar bg-trading-panel/30">
+        <div className="h-20 border-b border-trading-border flex flex-nowrap overflow-x-auto no-scrollbar bg-trading-panel/30 flex-shrink-0">
           {(analysis?.timeframes || [
             { timeframe: "H1", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." },
             { timeframe: "M15", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." },
@@ -533,137 +526,115 @@ export default function App() {
           ))}
         </div>
 
-        {/* Left: Chart Area */}
-        <div className={`
-          ${mobileActiveTab === 'CHART' ? 'flex' : 'hidden'} 
-          lg:flex col-span-12 lg:col-span-8 border-r border-trading-border flex flex-col relative h-[calc(100vh-140px)] md:h-[calc(100vh-134px)]
-        `}>
-          {/* Drawing Toolbar Toggle - Yellow Exness Style */}
-          <button 
-            onClick={() => setShowChartToolbar(!showChartToolbar)}
-            className="absolute left-0 top-1/2 -translate-y-1/2 z-[60] w-4 h-12 bg-warning flex items-center justify-center rounded-r-sm shadow-lg border border-black/20 text-black transition-all hover:w-5 active:scale-95 group"
-            title={showChartToolbar ? "Hide Drawing Tools" : "Show Drawing Tools"}
-          >
-            {showChartToolbar ? <ChevronLeft size={14} className="font-bold" /> : <ChevronRight size={14} className="font-bold" />}
-            
-            {/* Small Indicator if hidden */}
-            {!showChartToolbar && (
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-black/40 rounded-full" />
-            )}
-          </button>
+        {/* Dynamic Content Area */}
+        <div className="flex-1 grid grid-cols-12 overflow-hidden relative">
+            {/* Left: Chart Area */}
+            <div className={`
+              ${mobileActiveTab === 'CHART' ? 'col-span-12 flex' : 'hidden'} 
+              lg:flex lg:col-span-8 border-r border-trading-border flex-col relative h-full w-full
+            `}>
+              {/* Drawing Toolbar Toggle - Yellow Exness Style */}
+              <button 
+                onClick={() => setShowChartToolbar(!showChartToolbar)}
+                className="absolute left-0 top-1/2 -translate-y-1/2 z-[60] w-4 h-12 bg-warning flex items-center justify-center rounded-r-sm shadow-lg border border-black/20 text-black transition-all hover:w-5 active:scale-95 group"
+                title={showChartToolbar ? "Hide Drawing Tools" : "Show Drawing Tools"}
+              >
+                {showChartToolbar ? <ChevronLeft size={14} className="font-bold" /> : <ChevronRight size={14} className="font-bold" />}
+              </button>
 
-          <div id="tv_chart_container" className="flex-1 w-full bg-trading-bg" />
-
-          {/* Chart Helper Buttons (Dedicated Box at Bottom Right Corner) */}
-          <div className="absolute right-0 bottom-0 w-[52px] h-[90px] bg-[#05070a] border-l border-t border-white/10 z-[70] flex flex-col items-center justify-around py-1 shadow-2xl">
-            <button 
-              onClick={resetChart}
-              className="w-10 h-10 bg-transparent hover:bg-bear/20 flex flex-col items-center justify-center text-bear transition-all group"
-              title="Clear Chart"
-            >
-              <Trash2 size={16} className="drop-shadow-[0_0_8px_rgba(255,68,102,0.6)]" />
-              <span className="text-[6px] font-black uppercase mt-0.5 opacity-70">CLEAN</span>
-            </button>
-            
-            <div className="w-full h-[1px] bg-white/5" />
-
-            <button 
-              onClick={resetChart}
-              className="w-10 h-10 bg-transparent hover:bg-bull/20 flex flex-col items-center justify-center text-bull transition-all group animate-pulse"
-              title="Auto Fit Chart"
-            >
-              <RefreshCw size={16} className="drop-shadow-[0_0_8px_rgba(0,255,136,0.6)]" />
-              <span className="text-[6px] font-black uppercase mt-0.5 opacity-70">FIT</span>
-            </button>
-          </div>
-          
-          {/* Overlay Price Labels - Hidden when toolbar is hidden (Zen Mode) */}
-          {analysis && analysis.signal && showChartToolbar && (
-            <div className="absolute right-4 md:right-12 top-1/2 -translate-y-1/2 flex flex-col gap-1 pointer-events-none pr-4 z-10">
-               <div className={`text-white px-2 py-1 text-[9px] md:text-[10px] font-bold rounded-l-md shadow-lg border-y border-l border-white/20 whitespace-nowrap self-end ${analysis.signal.type === 'SELL' ? 'bg-bear' : 'bg-bull'}`}>
-                {analysis.signal.type === 'SELL' ? 'SELL ENTRY' : 'TP 2 TARGET'} @{analysis.signal.type === 'SELL' ? analysis.signal.zone : analysis.signal.tp2}
-               </div>
-               <div className="bg-warning text-black px-2 py-1 text-[9px] md:text-[10px] font-black rounded-l-md shadow-lg border-y border-l border-black/20 whitespace-nowrap self-end">
-                {analysis.signal.type === 'WAIT' ? 'WATCHING ZONE' : 'PENDING'} @{analysis.signal.zone}
-               </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right: AI Analysis Panel */}
-        <div className={`
-          ${mobileActiveTab === 'SIGNAL' ? 'flex' : 'hidden'} 
-          lg:flex col-span-12 lg:col-span-4 flex flex-col bg-trading-panel overflow-y-auto no-scrollbar h-[calc(100vh-140px)] md:h-[calc(100vh-134px)] pb-12 md:pb-0
-        `}>
-          {/* Signal Header */}
-          <div className="p-6 border-b border-trading-border bg-gradient-to-br from-trading-panel to-trading-bg">
-            <h2 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4">AI ENTRY SUGGESTION</h2>
-            <div className="flex justify-between items-center mb-6">
-              <div>
-                <p className={`text-5xl font-black italic tracking-tighter ${!analysis?.signal ? 'text-slate-500' : analysis.signal.type === 'WAIT' ? 'text-warning' : analysis.signal.type === 'BUY' ? 'text-bull' : 'text-bear'}`}>
-                  {analysis?.signal?.type || "SCANNING..."}
-                </p>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">Confidence Score: <span className="text-white">{analysis?.signal?.confidence || 0}%</span></p>
+              {/* REMOVED PB-6 TO ELIMINATE BLACK GAP, CHART NOW FITS PERFECTLY */}
+              <div className="flex-1 w-full bg-trading-bg relative"> 
+                <div id="tv_chart_container" className="h-full w-full" />
               </div>
-              {analysis && analysis.signal && (
-                 <div className="text-right">
-                  <div className="px-3 py-1 bg-white/5 border border-white/10 rounded-md">
-                    <p className="text-[10px] uppercase tracking-widest font-bold opacity-40">R:R RATIO</p>
-                    <p className="text-xl font-mono text-white font-black">{analysis.signal.rr || "---"}</p>
+              
+              {/* Overlay Price Labels */}
+              {analysis && analysis.signal && showChartToolbar && (
+                <div className="absolute right-4 md:right-12 top-1/2 -translate-y-1/2 flex flex-col gap-1 pointer-events-none pr-4 z-10">
+                  <div className={`text-white px-2 py-1 text-[9px] md:text-[10px] font-bold rounded-l-md shadow-lg border-y border-l border-white/20 whitespace-nowrap self-end ${analysis.signal.type === 'SELL' ? 'bg-bear' : 'bg-bull'}`}>
+                    {analysis.signal.type === 'SELL' ? 'SELL ENTRY' : 'TP 2 TARGET'} @{analysis.signal.type === 'SELL' ? analysis.signal.zone : analysis.signal.tp2}
                   </div>
-                 </div>
+                  <div className="bg-warning text-black px-2 py-1 text-[9px] md:text-[10px] font-black rounded-l-md shadow-lg border-y border-l border-black/20 whitespace-nowrap self-end">
+                    {analysis.signal.type === 'WAIT' ? 'WATCHING ZONE' : 'PENDING'} @{analysis.signal.zone}
+                  </div>
+                </div>
               )}
             </div>
 
-            {/* Checkpoint Matrix */}
-            <div className="space-y-3 mb-6">
-              {(analysis?.checkpoints || [
-                { label: "Price di zona S/R", checked: false },
-                { label: "RSI Multi-TF Alignment", checked: false },
-                { label: "Candlestick Confirmation", checked: false }
-              ]).map((c, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <div className={`w-3.5 h-3.5 rounded border transition-colors flex items-center justify-center ${c.checked ? 'bg-bull border-bull text-black' : 'border-slate-700'}`}>
-                    {c.checked && <Zap size={8} strokeWidth={4} />}
+            {/* Right: AI Analysis Panel */}
+            <div className={`
+              ${mobileActiveTab === 'SIGNAL' ? 'col-span-12 flex' : 'hidden'} 
+              lg:flex lg:col-span-4 flex-col bg-trading-panel overflow-y-auto no-scrollbar h-full w-full pb-20 lg:pb-0
+            `}>
+              {/* Signal Header */}
+              <div className="p-6 border-b border-trading-border bg-gradient-to-br from-trading-panel to-trading-bg flex-shrink-0">
+                <h2 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4">AI ENTRY SUGGESTION</h2>
+                <div className="flex justify-between items-center mb-6">
+                  <div>
+                    <p className={`text-5xl font-black italic tracking-tighter ${!analysis?.signal ? 'text-slate-500' : analysis.signal.type === 'WAIT' ? 'text-warning' : analysis.signal.type === 'BUY' ? 'text-bull' : 'text-bear'}`}>
+                      {analysis?.signal?.type || "SCANNING..."}
+                    </p>
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">Confidence Score: <span className="text-white">{analysis?.signal?.confidence || 0}%</span></p>
                   </div>
-                  <span className={`text-[11px] font-bold tracking-tight ${c.checked ? 'text-white' : 'text-slate-500'}`}>{c.label}</span>
+                  {analysis && analysis.signal && (
+                    <div className="text-right">
+                      <div className="px-3 py-1 bg-white/5 border border-white/10 rounded-md">
+                        <p className="text-[10px] uppercase tracking-widest font-bold opacity-40">R:R RATIO</p>
+                        <p className="text-xl font-mono text-white font-black">{analysis.signal.rr || "---"}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
 
-            {/* Price Levels Grid */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 bg-trading-bg border border-trading-border rounded">
-                <p className="text-[10px] uppercase tracking-widest font-bold opacity-40 text-slate-500 mb-1">ENTRY ZONE</p>
-                <p className="text-sm font-mono text-white">{analysis?.signal?.zone || "---"}</p>
-              </div>
-              <div className="p-3 bg-trading-bg border border-trading-border rounded">
-                <p className="text-[10px] uppercase tracking-widest font-bold opacity-40 text-bear mb-1">STOP LOSS</p>
-                <p className="text-sm font-mono text-bear font-bold">{analysis?.signal?.sl || "---"}</p>
-              </div>
-              <div className="p-3 bg-trading-bg border border-trading-border rounded">
-                <p className={`text-[10px] uppercase tracking-widest font-bold opacity-40 mb-1 ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>TP 1 TARGET</p>
-                <p className={`text-sm font-mono font-bold ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>{analysis?.signal?.tp1 || "---"}</p>
-              </div>
-              <div className="p-3 bg-trading-bg border border-trading-border rounded">
-                <p className={`text-[10px] uppercase tracking-widest font-bold opacity-40 mb-1 ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>TP 2 TARGET</p>
-                <p className={`text-sm font-mono font-black ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>{analysis?.signal?.tp2 || "---"}</p>
-              </div>
-            </div>
-          </div>
+                {/* Checkpoint Matrix */}
+                <div className="space-y-3 mb-6">
+                  {(analysis?.checkpoints || [
+                    { label: "Price di zona S/R", checked: false },
+                    { label: "RSI Multi-TF Alignment", checked: false },
+                    { label: "Candlestick Confirmation", checked: false }
+                  ]).map((c, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className={`w-3.5 h-3.5 rounded border transition-colors flex items-center justify-center ${c.checked ? 'bg-bull border-bull text-black' : 'border-slate-700'}`}>
+                        {c.checked && <Zap size={8} strokeWidth={4} />}
+                      </div>
+                      <span className={`text-[11px] font-bold tracking-tight ${c.checked ? 'text-white' : 'text-slate-500'}`}>{c.label}</span>
+                    </div>
+                  ))}
+                </div>
 
-          {/* Analysis Reason */}
-          <div className="p-6 flex-1">
-            <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4 tracking-tighter">REASONING & BIAS</h3>
-            <div className="prose prose-invert prose-sm max-w-none text-slate-400 font-medium leading-relaxed">
-              <Markdown remarkPlugins={[remarkGfm]}>{analysis?.reasoning || "Tunggu hasil pemindaian..."}</Markdown>
+                {/* Price Levels Grid */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 bg-trading-bg border border-trading-border rounded">
+                    <p className="text-[10px] uppercase tracking-widest font-bold opacity-40 text-slate-500 mb-1">ENTRY ZONE</p>
+                    <p className="text-sm font-mono text-white">{analysis?.signal?.zone || "---"}</p>
+                  </div>
+                  <div className="p-3 bg-trading-bg border border-trading-border rounded">
+                    <p className="text-[10px] uppercase tracking-widest font-bold opacity-40 text-bear mb-1">STOP LOSS</p>
+                    <p className="text-sm font-mono text-bear font-bold">{analysis?.signal?.sl || "---"}</p>
+                  </div>
+                  <div className="p-3 bg-trading-bg border border-trading-border rounded">
+                    <p className={`text-[10px] uppercase tracking-widest font-bold opacity-40 mb-1 ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>TP 1 TARGET</p>
+                    <p className={`text-sm font-mono font-bold ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>{analysis?.signal?.tp1 || "---"}</p>
+                  </div>
+                  <div className="p-3 bg-trading-bg border border-trading-border rounded">
+                    <p className={`text-[10px] uppercase tracking-widest font-bold opacity-40 mb-1 ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>TP 2 TARGET</p>
+                    <p className={`text-sm font-mono font-black ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>{analysis?.signal?.tp2 || "---"}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Analysis Reason */}
+              <div className="p-6 flex-1">
+                <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4 tracking-tighter">REASONING & BIAS</h3>
+                <div className="prose prose-invert prose-sm max-w-none text-slate-400 font-medium leading-relaxed">
+                  <Markdown remarkPlugins={[remarkGfm]}>{analysis?.reasoning || "Tunggu hasil pemindaian..."}</Markdown>
+                </div>
+              </div>
             </div>
-          </div>
         </div>
       </main>
 
       {/* Bottom Navigation for Mobile */}
-      <nav className="fixed bottom-0 left-0 right-0 h-16 bg-trading-panel border-t border-trading-border lg:hidden flex items-center justify-around px-4 z-[90] shadow-[0_-5px_15px_rgba(0,0,0,0.5)]">
+      <nav className="h-16 bg-trading-panel border-t border-trading-border lg:hidden flex items-center justify-around px-4 z-[90] shadow-[0_-5px_15px_rgba(0,0,0,0.5)] flex-shrink-0">
         {[
           { id: 'CHART', icon: <TrendingUp size={20} />, label: 'Market Chart' },
           { id: 'SIGNAL', icon: <Target size={20} />, label: 'AI Signal' },
@@ -690,7 +661,8 @@ export default function App() {
             initial={{ opacity: 0 }} 
             animate={{ opacity: 1 }} 
             exit={{ opacity: 0 }}
-            className="fixed inset-0 top-14 bottom-16 bg-trading-bg z-[85] lg:hidden flex flex-col"
+            className="fixed inset-0 top-14 bg-trading-bg z-[85] lg:hidden flex flex-col"
+            style={{ bottom: '64px' }} // Account for the mobile nav height (16 = 64px)
           >
              <div className="p-4 border-b border-trading-border bg-accent/5 flex justify-between items-center">
                 <span className="text-xs font-black text-white flex items-center gap-2 tracking-widest uppercase"><MessageSquare size={14}/> CONSULT ANALYST OMEGA</span>
