@@ -112,6 +112,8 @@ export default function App() {
   const [showChartToolbar, setShowChartToolbar] = useState(false);
   const [countdown, setCountdown] = useState(5);
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
+  const [liveIndicators, setLiveIndicators] = useState<TimeframeData[] | null>(null);
+  const [highlightTrigger, setHighlightTrigger] = useState(0); // State for targeting flash
   const [chatOpen, setChatOpen] = useState(false);
   const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL" | "CHAT">("SIGNAL");
   const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
@@ -141,30 +143,91 @@ export default function App() {
     return () => clearInterval(timer);
   }, [showSplash, countdown]);
 
-  const speakMessage = (text: string) => {
+  // Remove the timeout so highlightTrigger stays until re-triggered
+  // Or rather, we don't need a timeout anymore. It will just stay statically there.
+
+  const speakMessage = (text: string, rate: number = 0.85) => {
     if (!window.speechSynthesis) return;
     const msg = new SpeechSynthesisUtterance();
     msg.lang = 'en-US';
-    msg.rate = 0.9;
+    msg.rate = rate; // slightly slower
     msg.text = text;
     window.speechSynthesis.speak(msg);
   };
+
+const calculateRSI = (closes: number[], period: number = 14) => {
+  if (closes.length < period + 1) return 50;
+  let gains = 0;
+  let losses = 0;
+  
+  // Calculate initial average gain/loss
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
+  }
+  
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  
+  // Smoothed moving average for the rest
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) {
+      avgGain = (avgGain * (period - 1) + diff) / period;
+      avgLoss = (avgLoss * (period - 1)) / period;
+    } else {
+      avgGain = (avgGain * (period - 1)) / period;
+      avgLoss = (avgLoss * (period - 1) - diff) / period;
+    }
+  }
+  
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+};
+
+const getStructure = (closes: number[]) => {
+  if(closes.length < 3) return "Ranging";
+  const last = closes[closes.length - 1];
+  const prev = closes[closes.length - 2];
+  const prev2 = closes[closes.length - 3];
+  if (last > prev && prev > prev2) return "BOS UP (HH)";
+  if (last < prev && prev < prev2) return "BOS DOWN (LL)";
+  if (last > prev) return "Minor Rally";
+  if (last < prev) return "Minor Pullback";
+  return "Consolidating";
+};
 
   const runAnalysis = async () => {
     setLoading(true);
     try {
       // Helper function for voice signal
-      const speakSignal = (type: string) => {
-        if (type === 'BUY') speakMessage('BUY signal detected. Please check the terminal.');
-        else if (type === 'SELL') speakMessage('SELL signal detected. Please check the terminal.');
+      const speakSignal = (type: string, zone?: string) => {
+        let spelledZone = zone;
+        if (zone) {
+          // Add commas between digits to force the TTS engine to pause between them
+          spelledZone = zone.split('').map(char => char === '.' ? ' point ' : char).join(', ');
+        }
+        
+        if (type === 'BUY') {
+          speakMessage(`BUY signal detected. BUY at ${spelledZone}. Please check the terminal.`, 0.8);
+        } else if (type === 'SELL') {
+          speakMessage(`SELL signal detected. SELL at ${spelledZone}. Please check the terminal.`, 0.8);
+        }
       };
 
       // 1. Fetch exact real-time price & 24h stats from Binance (Public API)
       let currentPrice = 0;
       let priceChangePercent = 0;
       let priceString = "Unknown";
+      let shortTermTrendInfo = "";
+      let miniTrendPercent = 0; // Expose to fallback logic
       
+      const realTimeframes: TimeframeData[] = [];
+
       try {
+        // Fetch 24hr ticker
         const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
         if (binanceRes.ok) {
           const binanceData = await binanceRes.json();
@@ -172,9 +235,55 @@ export default function App() {
           priceChangePercent = parseFloat(binanceData.priceChangePercent);
           priceString = `$${currentPrice.toLocaleString()}`;
         }
+
+        // Fetch real-time klines for multiple timeframes to calculate exact RSI and Structure
+        const fetchTF = async (interval: string, tfLabel: string) => {
+          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`); // Pull 150 for RSI smoothing accuracy
+          if (res.ok) {
+            const klines = await res.json();
+            const closes = klines.map((k: any) => parseFloat(k[4]));
+            const rsi = Math.round(calculateRSI(closes, 14)); // This will now use 150 data points for precise Wilder's smoothing
+            
+            // For trend mapping, extract only the last 20 periods
+            const recentCloses = closes.slice(-20);
+            const first = recentCloses[0];
+            const last = recentCloses[recentCloses.length - 1];
+            const trendPct = ((last - first) / first) * 100;
+            const trendStr = trendPct > 0.5 ? "STRONG BULL" : trendPct > 0 ? "BULLISH" : trendPct < -0.5 ? "STRONG BEAR" : "BEARISH";
+            const rsiState = rsi > 70 ? "Overbought" : rsi < 30 ? "Oversold" : rsi > 55 ? "Bullish" : rsi < 45 ? "Bearish" : "Neutral";
+            const structure = getStructure(recentCloses);
+            
+            realTimeframes.push({
+              timeframe: tfLabel,
+              trend: trendStr,
+              rsi,
+              rsiState,
+              structure
+            });
+            
+            if (interval === '15m') {
+              miniTrendPercent = trendPct;
+              shortTermTrendInfo = `DATA KLINES 1 JAM TERAKHIR: Trend M15 bergerak sebesar ${miniTrendPercent.toFixed(2)}%. Closes (4 candle 15m terakhir): ${closes.slice(-4).join(', ')}.`;
+            }
+          }
+        };
+
+        await Promise.all([
+          fetchTF('5m', 'M5'),
+          fetchTF('15m', 'M15'),
+          fetchTF('1h', 'H1'),
+          fetchTF('4h', 'H4')
+        ]);
+        
+        // Sort timeframes
+        const tfOrder = ['M5', 'M15', 'H1', 'H4'];
+        realTimeframes.sort((a, b) => tfOrder.indexOf(a.timeframe) - tfOrder.indexOf(b.timeframe));
+
       } catch (e) {
         console.warn("Failed to fetch price from Binance API", e);
       }
+
+      const exactTimeframesStr = JSON.stringify(realTimeframes);
 
       // 2. Try AI Analysis if key exists
       if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY") {
@@ -185,7 +294,18 @@ export default function App() {
               {
                 role: "user",
                 parts: [
-                  { text: `System Context: ${BTC_ANALYST_SYSTEM_PROMPT}\n\nTUGAS:\nHarga BTC USD saat ini adalah ${priceString}. Trend 24 jam terakhir adalah ${priceChangePercent}%. Hasilkan estimasi teknikal akurat untuk RSI, Trend, dan Struktur (H1, M15, M5).\n\nCRITICAL INSTRUCTION FOR JSON:\n- The 'reasoning' field MUST BE UNDER 200 CHARACTERS.\n- KEMBALIKAN OUTPUT DALAM FORMAT JSON SAJA BERIKUT:\n{ "price": number, "timeframes": [ { "timeframe": string, "trend": string, "rsi": number, "rsiState": string, "structure": string } ], "signal": { "type": "BUY"|"SELL"|"WAIT", "confidence": number, "zone": string, "sl": number, "tp1": number, "tp2": number, "rr": string }, "reasoning": string, "checkpoints": [ { "label": string, "checked": boolean } ] }` }
+                  { text: `System Context: ${BTC_ANALYST_SYSTEM_PROMPT}\n\nDATA SAAT INI (REAL TIME MATEMATIS):\nHarga BTC USD detik ini: ${priceString}.
+Data riil timeframe saat ini (M5, M15, H1, H4): ${exactTimeframesStr}
+
+Sebagai scalper M15-H1, JANGAN menebak angka RSI atau Tren. GUNAKAN angka asli dari data JSON "exactTimeframesStr" di atas untuk mengisi field 'timeframes' di output. 
+Analisa sinyal (BUY/SELL/WAIT) berdasarkan bentrokan atau keselarasan dari RSI & Struktur asli tersebut. Jika H4 Bullish tapi M5/M15 Oversold, cari BUY. Jika H4 Bearish tapi M15 Overbought, cari SELL.
+
+CRITICAL INSTRUCTION FOR JSON:
+- Tentukan sinyal objektif: "BUY", "SELL", atau "WAIT" berdasarkan DATA REAL TIME di atas.
+- The 'reasoning' field MUST BE UNDER 200 CHARACTERS menjelaskan alasan berdasarkan korelasi multi-timeframe tersebut.
+- Field 'timeframes' WAJIB sama persis isinya dengan data riil yang saya berikan.
+- KEMBALIKAN OUTPUT DALAM FORMAT JSON SAJA BERIKUT:
+{ "price": number, "timeframes": [ { "timeframe": string, "trend": string, "rsi": number, "rsiState": string, "structure": string } ], "signal": { "type": "BUY"|"SELL"|"WAIT", "confidence": number, "zone": string, "sl": number, "tp1": number, "tp2": number, "rr": string }, "reasoning": string, "checkpoints": [ { "label": string, "checked": boolean } ] }` }
                 ]
               }
             ],
@@ -240,8 +360,9 @@ export default function App() {
           cleanText = cleanText.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
           const data = JSON.parse(cleanText) as MarketAnalysis;
           setAnalysis(data);
+          setHighlightTrigger(prev => prev + 1); // Trigger visual highlight
           if (data.signal?.type === 'BUY' || data.signal?.type === 'SELL') {
-            speakSignal(data.signal.type);
+            speakSignal(data.signal.type, data.signal.zone);
           }
           return;
         } catch (aiErr) {
@@ -256,41 +377,51 @@ export default function App() {
       const baseRsi = 50 + (priceChangePercent * 8);
       const dynamicRsi = (offset: number) => Math.max(10, Math.min(90, Math.round(baseRsi + offset)));
 
+      // Simulate scalping logic for fallback: If price pumped too much, it's a SELL (correction). If dumped, BUY.
+      let signalType: "BUY" | "SELL" | "WAIT" = "WAIT";
+      
+      // Use short term 15m trend for scalping logic (e.g. +/- 0.5% in an hour is a big move for M15)
+      if (miniTrendPercent > 0.5) signalType = "SELL"; // Overbought correction in short term
+      else if (miniTrendPercent > 0.1) signalType = "BUY"; // Riding slight upward momentum
+      else if (miniTrendPercent < -0.5) signalType = "BUY"; // Oversold bounce in short term
+      else if (miniTrendPercent < -0.1) signalType = "SELL"; // Riding slight downward momentum
+      else signalType = "WAIT"; // Flat market
+
       const localData: MarketAnalysis = {
         price: currentPrice,
-        timeframes: [
+        timeframes: realTimeframes.length > 0 ? realTimeframes : [
           { 
             timeframe: "H1", 
             trend: trend, 
             rsi: dynamicRsi(0), 
             rsiState: dynamicRsi(0) > 60 ? "Overbought" : dynamicRsi(0) < 40 ? "Oversold" : "Neutral", 
-            structure: priceChangePercent > 0.5 ? "BOS UP" : priceChangePercent < -0.5 ? "BOS DOWN" : "Ranging" 
+            structure: miniTrendPercent > 0.1 ? "BOS UP" : miniTrendPercent < -0.1 ? "BOS DOWN" : "Ranging" 
           },
           { 
             timeframe: "M15", 
             trend: trend, 
             rsi: dynamicRsi(5), 
             rsiState: dynamicRsi(5) > 65 ? "Strong" : dynamicRsi(5) < 35 ? "Weak" : "Consolidating", 
-            structure: priceChangePercent > 0.1 ? "HL / HH" : priceChangePercent < -0.1 ? "LH / LL" : "Inside Bar" 
+            structure: miniTrendPercent > 0.05 ? "HL / HH" : miniTrendPercent < -0.05 ? "LH / LL" : "Inside Bar" 
           },
           { 
             timeframe: "M5", 
             trend: trend, 
             rsi: dynamicRsi(12), 
-            rsiState: Math.abs(priceChangePercent) > 1 ? "Volatile" : "Stable", 
-            structure: priceChangePercent > 0 ? "Markup" : "Markdown" 
+            rsiState: Math.abs(miniTrendPercent) > 0.3 ? "Volatile" : "Stable", 
+            structure: miniTrendPercent > 0 ? "Markup" : "Markdown" 
           }
         ],
         signal: {
-          type: priceChangePercent > 0.5 ? "BUY" : priceChangePercent < -0.5 ? "SELL" : "WAIT",
-          confidence: Math.min(Math.abs(priceChangePercent) * 25 + 30, 98),
-          zone: (currentPrice * (priceChangePercent > 0 ? 0.997 : 1.003)).toFixed(1),
-          sl: (currentPrice * (priceChangePercent > 0 ? 0.991 : 1.009)).toFixed(1),
-          tp1: (currentPrice * (priceChangePercent > 0 ? 1.009 : 0.991)).toFixed(1),
-          tp2: (currentPrice * (priceChangePercent > 0 ? 1.019 : 0.981)).toFixed(1),
-          rr: "1:3.2"
+          type: signalType,
+          confidence: Math.min(Math.abs(miniTrendPercent) * 100 + 40, 95), // scale confidence up based on short term volatility
+          zone: (currentPrice * (signalType === "BUY" ? 0.998 : 1.002)).toFixed(1),
+          sl: (currentPrice * (signalType === "BUY" ? 0.993 : 1.007)).toFixed(1),
+          tp1: (currentPrice * (signalType === "BUY" ? 1.005 : 0.995)).toFixed(1),
+          tp2: (currentPrice * (signalType === "BUY" ? 1.010 : 0.990)).toFixed(1),
+          rr: "1:2.5"
         },
-        reasoning: `Berdasarkan volatilitas ${priceChangePercent.toFixed(2)}%, market sedang dalam kondisi ${trend}. Struktur harga mengonfirmasi pergerakan ${priceChangePercent > 0 ? 'bullish' : 'bearish'} dominan.`,
+        reasoning: `Berdasarkan pergerakan murni M15 terakhir (${miniTrendPercent.toFixed(2)}%), AI menangkap peluang aksi ${signalType} secepatnya.`,
         checkpoints: [
           { label: "Binance Live Sync", checked: true },
           { label: "Price Action Logic", checked: true },
@@ -298,8 +429,9 @@ export default function App() {
         ]
       };
       setAnalysis(localData);
+      setHighlightTrigger(prev => prev + 1); // Trigger visual highlight
       if (localData.signal?.type === 'BUY' || localData.signal?.type === 'SELL') {
-        speakSignal(localData.signal.type);
+        speakSignal(localData.signal.type, localData.signal.zone);
       }
     } catch (err: any) {
       console.error("General Analysis Error:", err);
@@ -334,6 +466,58 @@ export default function App() {
 
   useEffect(() => {
     runAnalysis();
+    
+    // Background poller for Live Math Indicators
+    const fetchBackgroundData = async () => {
+      try {
+        const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
+        let newPrice = 0;
+        if (binanceRes.ok) {
+          const binanceData = await binanceRes.json();
+          newPrice = parseFloat(binanceData.lastPrice);
+        }
+
+        const realTimeframes: TimeframeData[] = [];
+        const fetchTF = async (interval: string, tfLabel: string) => {
+          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`); // Fix: Limit 150
+          if (res.ok) {
+            const klines = await res.json();
+            const closes = klines.map((k: any) => parseFloat(k[4]));
+            const rsi = Math.round(calculateRSI(closes, 14));
+            
+            const recentCloses = closes.slice(-20);
+            const first = recentCloses[0];
+            const last = recentCloses[recentCloses.length - 1];
+            const trendPct = ((last - first) / first) * 100;
+            const trendStr = trendPct > 0.5 ? "STRONG BULL" : trendPct > 0 ? "BULLISH" : trendPct < -0.5 ? "STRONG BEAR" : "BEARISH";
+            const rsiState = rsi > 70 ? "Overbought" : rsi < 30 ? "Oversold" : rsi > 55 ? "Bullish" : rsi < 45 ? "Bearish" : "Neutral";
+            const structure = getStructure(recentCloses);
+            
+            realTimeframes.push({ timeframe: tfLabel, trend: trendStr, rsi, rsiState, structure });
+          }
+        };
+
+        await Promise.all([
+          fetchTF('5m', 'M5'),
+          fetchTF('15m', 'M15'),
+          fetchTF('1h', 'H1'),
+          fetchTF('4h', 'H4')
+        ]);
+        
+        const tfOrder = ['M5', 'M15', 'H1', 'H4'];
+        realTimeframes.sort((a, b) => tfOrder.indexOf(a.timeframe) - tfOrder.indexOf(b.timeframe));
+
+        setLiveIndicators(realTimeframes);
+        if (newPrice) {
+           setAnalysis(prev => prev ? { ...prev, price: newPrice } : null);
+        }
+      } catch (err) {
+        // Ignore background errors
+      }
+    };
+
+    const intervalId = setInterval(fetchBackgroundData, 3000); // 3 seconds for extremely snappy feel instead of 10s
+    return () => clearInterval(intervalId);
   }, []);
 
   const getTrendColor = (trend: string) => {
@@ -505,12 +689,12 @@ export default function App() {
         
         {/* Top Timeframe Strip */}
         <div className="h-20 border-b border-trading-border flex flex-nowrap overflow-x-auto no-scrollbar bg-trading-panel/30 flex-shrink-0">
-          {(analysis?.timeframes || [
+          {(liveIndicators || analysis?.timeframes || [
             { timeframe: "H1", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." },
             { timeframe: "M15", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." },
             { timeframe: "M5", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." }
-          ]).slice(0, 3).map((tf, i) => (
-            <div key={i} className={`min-w-[140px] flex-1 p-3 border-r border-trading-border flex flex-col justify-between ${analysis ? "" : "animate-pulse"}`}>
+          ]).slice(0, 4).map((tf, i) => (
+            <div key={i} className={`min-w-[140px] flex-1 p-3 border-r border-trading-border flex flex-col justify-between ${liveIndicators || analysis ? "" : "animate-pulse"}`}>
               <div className="flex justify-between items-start">
                 <span className="text-[10px] font-bold text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded tracking-widest leading-none">{tf.timeframe} [EMA]</span>
                 <span className="text-[8px] uppercase tracking-widest font-bold opacity-20">STRUCTURE</span>
@@ -542,22 +726,49 @@ export default function App() {
                 {showChartToolbar ? <ChevronLeft size={14} className="font-bold" /> : <ChevronRight size={14} className="font-bold" />}
               </button>
 
-              {/* REMOVED PB-6 TO ELIMINATE BLACK GAP, CHART NOW FITS PERFECTLY */}
-              <div className="flex-1 w-full bg-trading-bg relative"> 
+              {/* TRADING VIEW CHART CONTAINER */}
+              <div className="flex-1 w-full bg-trading-bg relative overflow-hidden"> 
                 <div id="tv_chart_container" className="h-full w-full" />
+                
+                {/* Visual Target Lock Highlight Overlay (TV-Style Horizontal Ray) */}
+                <AnimatePresence>
+                  {analysis?.signal && (
+                    <motion.div
+                      key={highlightTrigger} // Use highlight trigger here just to fire the re-entry animation when updated
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.3 }}
+                      className="absolute left-0 w-full top-[30%] z-[60] flex items-center pointer-events-none drop-shadow-md"
+                    >
+                      {/* Text Label on the Left */}
+                      <div className="pl-4 pr-3 text-[10px] md:text-xs uppercase font-bold tracking-widest drop-shadow-lg whitespace-nowrap bg-trading-bg/50 backdrop-blur-sm" 
+                           style={{ color: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}>
+                        {analysis.signal.type} ZONE
+                      </div>
+
+                      {/* Connecting Horizontal Line (Dotted) */}
+                      <div className="flex-1 h-0 border-b-2 border-dotted opacity-60" 
+                           style={{ borderColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }} />
+
+                      {/* True TV Style Tag Polygon on the Right Edge */}
+                      <div className="flex items-center">
+                        {/* Arrow Pointing Left */}
+                        <div 
+                           className="w-0 h-0 border-y-[12px] border-y-transparent border-r-[8px]" 
+                           style={{ borderRightColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }} 
+                        />
+                        {/* Ticker Tag Body (Exactly matching TV dimensions) */}
+                        <div 
+                           className="text-white font-mono text-[11px] font-semibold h-[24px] px-1.5 flex items-center justify-center rounded-sm rounded-l-none"
+                           style={{ backgroundColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}
+                        >
+                           {analysis.signal.zone}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
-              
-              {/* Overlay Price Labels */}
-              {analysis && analysis.signal && showChartToolbar && (
-                <div className="absolute right-4 md:right-12 top-1/2 -translate-y-1/2 flex flex-col gap-1 pointer-events-none pr-4 z-10">
-                  <div className={`text-white px-2 py-1 text-[9px] md:text-[10px] font-bold rounded-l-md shadow-lg border-y border-l border-white/20 whitespace-nowrap self-end ${analysis.signal.type === 'SELL' ? 'bg-bear' : 'bg-bull'}`}>
-                    {analysis.signal.type === 'SELL' ? 'SELL ENTRY' : 'TP 2 TARGET'} @{analysis.signal.type === 'SELL' ? analysis.signal.zone : analysis.signal.tp2}
-                  </div>
-                  <div className="bg-warning text-black px-2 py-1 text-[9px] md:text-[10px] font-black rounded-l-md shadow-lg border-y border-l border-black/20 whitespace-nowrap self-end">
-                    {analysis.signal.type === 'WAIT' ? 'WATCHING ZONE' : 'PENDING'} @{analysis.signal.zone}
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* Right: AI Analysis Panel */}
