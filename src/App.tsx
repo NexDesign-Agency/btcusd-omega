@@ -17,18 +17,24 @@ import {
   LayoutGrid,
   Info,
   Target,
-  ShieldCheck
+  ShieldCheck,
+  ChevronLeft,
+  ChevronRight,
+  Trash2,
+  Maximize2
 } from "lucide-react";
 import { BTC_ANALYST_SYSTEM_PROMPT } from "./constants";
 
 // TradingView widget script loader
-const useTradingView = (containerId: string, isActive: boolean) => {
+const useTradingView = (containerId: string, isActive: boolean, hideToolbar: boolean, refreshKey: number) => {
   useEffect(() => {
     if (!isActive) return;
 
     const initWidget = () => {
       const container = document.getElementById(containerId);
       if (container && window.TradingView) {
+        // Clear container to prevent duplicate widgets
+        container.innerHTML = '';
         try {
           new window.TradingView.widget({
             autosize: true,
@@ -40,8 +46,10 @@ const useTradingView = (containerId: string, isActive: boolean) => {
             locale: "en",
             toolbar_bg: "#05070a",
             enable_publishing: false,
-            hide_side_toolbar: false,
-            allow_symbol_change: true,
+            hide_side_toolbar: hideToolbar,
+            allow_symbol_change: false,
+            save_image: false,
+            header_widget_buttons_mode: "adaptive",
             container_id: containerId,
           });
         } catch (e) {
@@ -73,7 +81,7 @@ const useTradingView = (containerId: string, isActive: boolean) => {
         return () => clearInterval(interval);
       }
     }
-  }, [containerId, isActive]);
+  }, [containerId, isActive, hideToolbar, refreshKey]);
 };
 
 interface TimeframeData {
@@ -103,6 +111,8 @@ interface MarketAnalysis {
 export default function App() {
   const [loading, setLoading] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [showChartToolbar, setShowChartToolbar] = useState(false);
+  const [chartRefreshKey, setChartRefreshKey] = useState(0);
   const [countdown, setCountdown] = useState(5);
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
@@ -111,7 +121,7 @@ export default function App() {
   const [input, setInput] = useState("");
   
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-  useTradingView("tv_chart_container", !showSplash);
+  useTradingView("tv_chart_container", !showSplash, !showChartToolbar, chartRefreshKey);
 
   const enterTerminal = () => {
     setShowSplash(false);
@@ -335,6 +345,10 @@ export default function App() {
     return "text-warning border-warning/20 bg-warning/5";
   };
 
+  const resetChart = () => {
+    setChartRefreshKey(prev => prev + 1);
+  };
+
   if (showSplash) {
     return (
       <div className="min-h-[100dvh] w-screen bg-[#05070a] text-white flex flex-col relative overflow-hidden font-sans select-none">
@@ -520,11 +534,51 @@ export default function App() {
         </div>
 
         {/* Left: Chart Area */}
-        <div className={`${mobileActiveTab === 'CHART' ? 'flex' : 'hidden'} lg:flex col-span-12 lg:col-span-8 border-r border-trading-border flex flex-col relative h-[calc(100vh-140px)] md:h-[calc(100vh-134px)]`}>
+        <div className={`
+          ${mobileActiveTab === 'CHART' ? 'flex' : 'hidden'} 
+          lg:flex col-span-12 lg:col-span-8 border-r border-trading-border flex flex-col relative h-[calc(100vh-140px)] md:h-[calc(100vh-134px)]
+        `}>
+          {/* Drawing Toolbar Toggle - Yellow Exness Style */}
+          <button 
+            onClick={() => setShowChartToolbar(!showChartToolbar)}
+            className="absolute left-0 top-1/2 -translate-y-1/2 z-[60] w-4 h-12 bg-warning flex items-center justify-center rounded-r-sm shadow-lg border border-black/20 text-black transition-all hover:w-5 active:scale-95 group"
+            title={showChartToolbar ? "Hide Drawing Tools" : "Show Drawing Tools"}
+          >
+            {showChartToolbar ? <ChevronLeft size={14} className="font-bold" /> : <ChevronRight size={14} className="font-bold" />}
+            
+            {/* Small Indicator if hidden */}
+            {!showChartToolbar && (
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-black/40 rounded-full" />
+            )}
+          </button>
+
           <div id="tv_chart_container" className="flex-1 w-full bg-trading-bg" />
+
+          {/* Chart Helper Buttons (Dedicated Box at Bottom Right Corner) */}
+          <div className="absolute right-0 bottom-0 w-[52px] h-[90px] bg-[#05070a] border-l border-t border-white/10 z-[70] flex flex-col items-center justify-around py-1 shadow-2xl">
+            <button 
+              onClick={resetChart}
+              className="w-10 h-10 bg-transparent hover:bg-bear/20 flex flex-col items-center justify-center text-bear transition-all group"
+              title="Clear Chart"
+            >
+              <Trash2 size={16} className="drop-shadow-[0_0_8px_rgba(255,68,102,0.6)]" />
+              <span className="text-[6px] font-black uppercase mt-0.5 opacity-70">CLEAN</span>
+            </button>
+            
+            <div className="w-full h-[1px] bg-white/5" />
+
+            <button 
+              onClick={resetChart}
+              className="w-10 h-10 bg-transparent hover:bg-bull/20 flex flex-col items-center justify-center text-bull transition-all group animate-pulse"
+              title="Auto Fit Chart"
+            >
+              <RefreshCw size={16} className="drop-shadow-[0_0_8px_rgba(0,255,136,0.6)]" />
+              <span className="text-[6px] font-black uppercase mt-0.5 opacity-70">FIT</span>
+            </button>
+          </div>
           
-          {/* Overlay Price Labels */}
-          {analysis && analysis.signal && (
+          {/* Overlay Price Labels - Hidden when toolbar is hidden (Zen Mode) */}
+          {analysis && analysis.signal && showChartToolbar && (
             <div className="absolute right-4 md:right-12 top-1/2 -translate-y-1/2 flex flex-col gap-1 pointer-events-none pr-4 z-10">
                <div className={`text-white px-2 py-1 text-[9px] md:text-[10px] font-bold rounded-l-md shadow-lg border-y border-l border-white/20 whitespace-nowrap self-end ${analysis.signal.type === 'SELL' ? 'bg-bear' : 'bg-bull'}`}>
                 {analysis.signal.type === 'SELL' ? 'SELL ENTRY' : 'TP 2 TARGET'} @{analysis.signal.type === 'SELL' ? analysis.signal.zone : analysis.signal.tp2}
@@ -537,8 +591,10 @@ export default function App() {
         </div>
 
         {/* Right: AI Analysis Panel */}
-        <div className={`${mobileActiveTab === 'SIGNAL' ? 'flex' : 'hidden'} lg:flex col-span-12 lg:col-span-4 flex flex-col bg-trading-panel overflow-y-auto no-scrollbar h-[calc(100vh-140px)] md:h-[calc(100vh-134px)] pb-12 md:pb-0`}>
-          
+        <div className={`
+          ${mobileActiveTab === 'SIGNAL' ? 'flex' : 'hidden'} 
+          lg:flex col-span-12 lg:col-span-4 flex flex-col bg-trading-panel overflow-y-auto no-scrollbar h-[calc(100vh-140px)] md:h-[calc(100vh-134px)] pb-12 md:pb-0
+        `}>
           {/* Signal Header */}
           <div className="p-6 border-b border-trading-border bg-gradient-to-br from-trading-panel to-trading-bg">
             <h2 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4">AI ENTRY SUGGESTION</h2>
@@ -598,30 +654,9 @@ export default function App() {
 
           {/* Analysis Reason */}
           <div className="p-6 flex-1">
-            <div className="flex items-center gap-2 mb-4">
-              <Activity size={14} className="text-accent" />
-              <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-40">ANALYSIS REASONING</h3>
-            </div>
-            <div className="bg-trading-bg/50 p-4 border border-trading-border rounded-lg">
-              <div className="markdown-body text-slate-400 italic">
-                <Markdown remarkPlugins={[remarkGfm]}>{analysis?.reasoning || "*Waiting for market scan results...*"}</Markdown>
-              </div>
-            </div>
-
-            {/* Simple Stats */}
-            <div className="mt-8 pt-6 border-t border-trading-border flex justify-between">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest font-bold opacity-40">WIN RATE</p>
-                <p className="text-xl font-black text-white font-mono">0.0%</p>
-              </div>
-              <div className="text-center">
-                <p className="text-[10px] uppercase tracking-widest font-bold opacity-40">WIN</p>
-                <p className="text-xl font-black text-bull font-mono">0</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase tracking-widest font-bold opacity-40">LOSS</p>
-                <p className="text-xl font-black text-bear font-mono">0</p>
-              </div>
+            <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4 tracking-tighter">REASONING & BIAS</h3>
+            <div className="prose prose-invert prose-sm max-w-none text-slate-400 font-medium leading-relaxed">
+              <Markdown remarkPlugins={[remarkGfm]}>{analysis?.reasoning || "Tunggu hasil pemindaian..."}</Markdown>
             </div>
           </div>
         </div>
