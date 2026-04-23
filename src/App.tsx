@@ -19,7 +19,6 @@ import {
   ChevronLeft,
   ChevronRight
 } from "lucide-react";
-import { BTC_ANALYST_SYSTEM_PROMPT } from "./constants";
 
 // TradingView widget script loader
 const useTradingView = (containerId: string, isActive: boolean, hideToolbar: boolean) => {
