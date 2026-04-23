@@ -10,7 +10,6 @@ import {
   Zap,
   RefreshCw,
   Search,
-  MessageSquare,
   ChevronDown,
   ChevronUp,
   LayoutGrid,
@@ -94,6 +93,7 @@ interface MarketAnalysis {
   timeframes: TimeframeData[];
   signal: {
     type: "BUY" | "SELL" | "WAIT";
+    tier: number;
     confidence: number;
     zone: string;
     sl: string;
@@ -113,10 +113,7 @@ export default function App() {
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [liveIndicators, setLiveIndicators] = useState<TimeframeData[] | null>(null);
   const [highlightTrigger, setHighlightTrigger] = useState(0); // State for targeting flash
-  const [chatOpen, setChatOpen] = useState(false);
-  const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL" | "CHAT">("SIGNAL");
-  const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const [input, setInput] = useState("");
+  const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL">("SIGNAL");
   
   useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
 
@@ -248,8 +245,8 @@ const getStructure = (closes: number[]) => {
             const closes = klines.map((k: any) => parseFloat(k[4]));
             const rsi = Math.round(calculateRSI(closes, 14)); // This will now use 150 data points for precise Wilder's smoothing
             
-            // For trend mapping, extract only the last 20 periods
-            const recentCloses = closes.slice(-20);
+            // For trend mapping, extract only the last 50 periods
+            const recentCloses = closes.slice(-50);
             const first = recentCloses[0];
             const last = recentCloses[recentCloses.length - 1];
             const trendPct = ((last - first) / first) * 100;
@@ -280,7 +277,7 @@ const getStructure = (closes: number[]) => {
         ]);
         
         // Sort timeframes
-        const tfOrder = ['M5', 'M15', 'H1', 'H4'];
+        const tfOrder = ['H4', 'H1', 'M15', 'M5'];
         realTimeframes.sort((a, b) => tfOrder.indexOf(a.timeframe) - tfOrder.indexOf(b.timeframe));
 
       } catch (e) {
@@ -296,7 +293,8 @@ const getStructure = (closes: number[]) => {
       const m5 = realTimeframes.find(t => t.timeframe === 'M5');
 
       let signalType: "BUY" | "SELL" | "WAIT" = "WAIT";
-      let reasoningTxt = "Market konsolidasi. Belum ada setup probabilitas tinggi.";
+      let reasoningTxt = "Menunggu konfirmasi...";
+      let tier = 0;
       let bullCount = 0;
       let bearCount = 0;
       let avgRsi = 50;
@@ -306,36 +304,67 @@ const getStructure = (closes: number[]) => {
         bearCount = [h4, h1, m15, m5].filter(t => t.trend.includes('BEAR')).length;
         avgRsi = (h1.rsi + m15.rsi) / 2;
 
-        if (bullCount >= 3 && avgRsi < 70) {
-          signalType = "BUY";
-          reasoningTxt = `${bullCount}/4 TF konfirmasi bullish. RSI H1:${h1.rsi} M15:${m15.rsi}. Momentum naik terkonfirmasi.`;
-        } else if (bearCount >= 3 && avgRsi > 30) {
-          signalType = "SELL";
-          reasoningTxt = `${bearCount}/4 TF konfirmasi bearish. RSI H1:${h1.rsi} M15:${m15.rsi}. Momentum turun terkonfirmasi.`;
-        } else if (m15.rsi <= 30 && h4.trend.includes('BULL')) {
-          signalType = "BUY";
-          reasoningTxt = `M15 Oversold (RSI ${m15.rsi}) di tengah tren H4 Bullish. Setup bounce/reversal.`;
-        } else if (m15.rsi >= 70 && h4.trend.includes('BEAR')) {
-          signalType = "SELL";
-          reasoningTxt = `M15 Overbought (RSI ${m15.rsi}) di tengah tren H4 Bearish. Setup rejection/reversal.`;
-        } else {
+        const h4Bullish = h4.trend.includes('BULL');
+        const h4Bearish = h4.trend.includes('BEAR');
+        const h4Sideways = !h4Bullish && !h4Bearish;
+
+        // GARIS MERAH: H4 sideways = DILARANG TRADING
+        if (h4Sideways) {
           signalType = "WAIT";
-          reasoningTxt = `Signal konflik antar TF. Bull:${bullCount} Bear:${bearCount}. Tunggu konfirmasi lebih jelas.`;
+          tier = 0;
+          reasoningTxt = `H4 SIDEWAYS (${h4.structure}). Tidak ada arah dominan. DILARANG ENTRY sampai H4 konfirmasi trend.`;
+        }
+        // H4 BULLISH — hanya cari BUY
+        else if (h4Bullish) {
+          // TIER 1: 4/4 TF Bullish
+          if (bullCount === 4 && avgRsi < 68) {
+            signalType = "BUY"; tier = 1;
+            reasoningTxt = `TIER 1 — 4/4 TF Bullish. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup terkuat, full momentum.`;
+          }
+          // TIER 2: 3/4 TF Bullish, H4 sudah konfirmasi
+          else if (bullCount === 3 && avgRsi < 70) {
+            signalType = "BUY"; tier = 2;
+            reasoningTxt = `TIER 2 — 3/4 TF Bullish, H4 konfirmasi. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup moderat.`;
+          }
+          // TIER 3: H4 Bullish + M15 Oversold ekstrim = bounce
+          else if (m15.rsi <= 28 && h1.rsi < 45) {
+            signalType = "BUY"; tier = 3;
+            reasoningTxt = `TIER 3 — H4 Bullish + M15 Oversold RSI:${m15.rsi}. Setup bounce, gunakan SL ketat.`;
+          }
+          // H4 Bullish tapi TF lain belum konfirmasi
+          else {
+            signalType = "WAIT"; tier = 0;
+            reasoningTxt = `H4 Bullish tapi TF kecil belum konfirmasi arah. Bull:${bullCount}/4. Tunggu setup bersih.`;
+          }
+        }
+        // H4 BEARISH — hanya cari SELL
+        else if (h4Bearish) {
+          // TIER 1: 4/4 TF Bearish
+          if (bearCount === 4 && avgRsi > 32) {
+            signalType = "SELL"; tier = 1;
+            reasoningTxt = `TIER 1 — 4/4 TF Bearish. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup terkuat, full momentum.`;
+          }
+          // TIER 2: 3/4 TF Bearish, H4 sudah konfirmasi
+          else if (bearCount === 3 && avgRsi > 30) {
+            signalType = "SELL"; tier = 2;
+            reasoningTxt = `TIER 2 — 3/4 TF Bearish, H4 konfirmasi. RSI H1:${h1.rsi} M15:${m15.rsi}. Setup moderat.`;
+          }
+          // TIER 3: H4 Bearish + M15 Overbought ekstrim = rejection
+          else if (m15.rsi >= 72 && h1.rsi > 55) {
+            signalType = "SELL"; tier = 3;
+            reasoningTxt = `TIER 3 — H4 Bearish + M15 Overbought RSI:${m15.rsi}. Setup rejection, gunakan SL ketat.`;
+          }
+          // H4 Bearish tapi TF lain belum konfirmasi
+          else {
+            signalType = "WAIT"; tier = 0;
+            reasoningTxt = `H4 Bearish tapi TF kecil belum konfirmasi arah. Bear:${bearCount}/4. Tunggu setup bersih.`;
+          }
         }
       }
 
-      // Hitung confidence dari jumlah TF yang align + RSI strength
-      const alignedCount = signalType === "BUY" ? bullCount : signalType === "SELL" ? bearCount : 0;
-      const rsiStrength = signalType === "BUY" 
-        ? Math.max(0, 70 - avgRsi) / 40 
-        : signalType === "SELL" 
-        ? Math.max(0, avgRsi - 30) / 40 
-        : 0;
-      const calcConf = signalType === "WAIT" ? 0 : Math.round(50 + (alignedCount * 10) + (rsiStrength * 20));
-
-      // Hitung ATR 14 dari klines H1
+      // Hitung ATR dari H1 klines
       const calcATR = (klines: any[], period = 14) => {
-        if (!klines || klines.length < period + 1) return currentPrice * 0.005; // Fallback
+        if (!klines || klines.length < period + 1) return currentPrice * 0.005;
         const trs = klines.slice(-period - 1).map((k: any, i: number, arr: any[]) => {
           if (i === 0) return parseFloat(k[2]) - parseFloat(k[3]);
           const high = parseFloat(k[2]);
@@ -347,28 +376,31 @@ const getStructure = (closes: number[]) => {
       };
 
       const atr = calcATR(h1RawKlines);
-      
-      const slRaw = signalType === "BUY" 
-        ? (currentPrice - atr * 1.5).toFixed(1)
-        : (currentPrice + atr * 1.5).toFixed(1);
-      const tp1Raw = signalType === "BUY"
-        ? (currentPrice + atr * 1.5).toFixed(1)
-        : (currentPrice - atr * 1.5).toFixed(1);
-      const tp2Raw = signalType === "BUY"
-        ? (currentPrice + atr * 3).toFixed(1)
-        : (currentPrice - atr * 3).toFixed(1);
+
+      // SL/TP multiplier berdasarkan tier
+      const slMult  = tier === 1 ? 2.0 : tier === 2 ? 1.5 : 1.0;
+      const tp1Mult = tier === 1 ? 2.0 : tier === 2 ? 1.5 : 1.0;
+      const tp2Mult = tier === 1 ? 4.0 : tier === 2 ? 3.0 : 2.0;
+
+      const slRaw  = signalType === "BUY" ? (currentPrice - atr * slMult).toFixed(1)  : (currentPrice + atr * slMult).toFixed(1);
+      const tp1Raw = signalType === "BUY" ? (currentPrice + atr * tp1Mult).toFixed(1) : (currentPrice - atr * tp1Mult).toFixed(1);
+      const tp2Raw = signalType === "BUY" ? (currentPrice + atr * tp2Mult).toFixed(1) : (currentPrice - atr * tp2Mult).toFixed(1);
+
+      // Confidence berdasarkan tier
+      const calcConf = tier === 1 ? 92 : tier === 2 ? 75 : tier === 3 ? 62 : 0;
 
       const localData: MarketAnalysis = {
         price: currentPrice,
         timeframes: realTimeframes,
         signal: {
           type: signalType,
+          tier: tier,
           confidence: calcConf, 
           zone: currentPrice.toFixed(1), // Entry at market price logic
           sl: parseFloat(slRaw),
           tp1: parseFloat(tp1Raw),
           tp2: parseFloat(tp2Raw),
-          rr: "1:2"
+          rr: tier === 3 ? "1:1" : "1:2"
         },
         reasoning: reasoningTxt,
         checkpoints: [
@@ -388,21 +420,6 @@ const getStructure = (closes: number[]) => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleChat = async () => {
-    if (!input.trim()) return;
-    const newMessages = [...messages, { role: "user" as const, content: input }];
-    setMessages(newMessages);
-    setInput("");
-    
-    // Simulate thinking delay then return static offline message
-    setTimeout(() => {
-      setMessages([...newMessages, { 
-        role: "assistant", 
-        content: "⚠️ **Mode Pure Math Aktif.**\n\nKoneksi ke server AI dimatikan sesuai instruksi. Seluruh analisa saat ini di-*handle* 100% oleh skrip kalkulasi matematis lokal dari data *real-time* Binance API." 
-      }]);
-    }, 800);
   };
 
   useEffect(() => {
@@ -426,7 +443,7 @@ const getStructure = (closes: number[]) => {
             const closes = klines.map((k: any) => parseFloat(k[4]));
             const rsi = Math.round(calculateRSI(closes, 14));
             
-            const recentCloses = closes.slice(-20);
+            const recentCloses = closes.slice(-50);
             const first = recentCloses[0];
             const last = recentCloses[recentCloses.length - 1];
             const trendPct = ((last - first) / first) * 100;
@@ -445,7 +462,7 @@ const getStructure = (closes: number[]) => {
           fetchTF('4h', 'H4')
         ]);
         
-        const tfOrder = ['M5', 'M15', 'H1', 'H4'];
+        const tfOrder = ['H4', 'H1', 'M15', 'M5'];
         realTimeframes.sort((a, b) => tfOrder.indexOf(a.timeframe) - tfOrder.indexOf(b.timeframe));
 
         setLiveIndicators(realTimeframes);
@@ -631,6 +648,7 @@ const getStructure = (closes: number[]) => {
         {/* Top Timeframe Strip */}
         <div className="h-20 border-b border-trading-border flex flex-nowrap overflow-x-auto no-scrollbar bg-trading-panel/30 flex-shrink-0">
           {(liveIndicators || analysis?.timeframes || [
+            { timeframe: "H4", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." },
             { timeframe: "H1", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." },
             { timeframe: "M15", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." },
             { timeframe: "M5", trend: "NEUTRAL", rsi: 50, rsiState: "...", structure: "..." }
@@ -726,6 +744,11 @@ const getStructure = (closes: number[]) => {
                       {analysis?.signal?.type || "SCANNING..."}
                     </p>
                     <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">Confidence Score: <span className="text-white">{analysis?.signal?.confidence || 0}%</span></p>
+                    {analysis?.signal?.tier && analysis?.signal?.tier > 0 ? (
+                      <p className="text-[10px] font-bold tracking-widest uppercase opacity-60 mt-1">
+                        {analysis.signal.tier === 1 ? "⚡ TIER 1 — FULL MOMENTUM" : analysis.signal.tier === 2 ? "✅ TIER 2 — MODERAT" : "⚠️ TIER 3 — SCALP KETAT"}
+                      </p>
+                    ) : null}
                   </div>
                   {analysis && analysis.signal && (
                     <div className="text-right">
@@ -776,6 +799,16 @@ const getStructure = (closes: number[]) => {
 
               {/* Analysis Reason */}
               <div className="p-6 flex-1">
+                {analysis?.signal?.type === "WAIT" && (
+                  <div className="mb-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-yellow-400 text-[11px] font-bold">
+                    ⛔ TIDAK ADA SETUP VALID — JANGAN ENTRY
+                  </div>
+                )}
+                {analysis?.signal?.type !== "WAIT" && analysis?.signal?.tier === 3 && (
+                  <div className="mb-3 p-3 bg-orange-500/10 border border-orange-500/30 rounded text-orange-400 text-[11px] font-bold">
+                    ⚠️ TIER 3 — Setup lemah. Lot kecil, SL ketat, konfirmasi manual dulu di MT5.
+                  </div>
+                )}
                 <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4 tracking-tighter">REASONING & BIAS</h3>
                 <div className="prose prose-invert prose-sm max-w-none text-slate-400 font-medium leading-relaxed">
                   <Markdown remarkPlugins={[remarkGfm]}>{analysis?.reasoning || "Tunggu hasil pemindaian..."}</Markdown>
@@ -789,8 +822,7 @@ const getStructure = (closes: number[]) => {
       <nav className="h-16 bg-trading-panel border-t border-trading-border lg:hidden flex items-center justify-around px-4 z-[90] shadow-[0_-5px_15px_rgba(0,0,0,0.5)] flex-shrink-0">
         {[
           { id: 'CHART', icon: <TrendingUp size={20} />, label: 'Market Chart' },
-          { id: 'SIGNAL', icon: <Target size={20} />, label: 'AI Signal' },
-          { id: 'CHAT', icon: <MessageSquare size={20} />, label: 'AI Consult' }
+          { id: 'SIGNAL', icon: <Target size={20} />, label: 'Signal Omega' }
         ].map((tab) => (
           <button
             key={tab.id}
@@ -805,102 +837,6 @@ const getStructure = (closes: number[]) => {
           </button>
         ))}
       </nav>
-
-      {/* Persistent Chat Integration for Mobile (when CHAT tab is active) */}
-      <AnimatePresence>
-        {mobileActiveTab === 'CHAT' && (
-          <motion.div 
-            initial={{ opacity: 0 }} 
-            animate={{ opacity: 1 }} 
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 top-14 bg-trading-bg z-[85] lg:hidden flex flex-col"
-            style={{ bottom: '64px' }} // Account for the mobile nav height (16 = 64px)
-          >
-             <div className="p-4 border-b border-trading-border bg-accent/5 flex justify-between items-center">
-                <span className="text-xs font-black text-white flex items-center gap-2 tracking-widest uppercase"><MessageSquare size={14}/> CONSULT ANALYST OMEGA</span>
-                <span className="text-[10px] font-bold text-bull animate-pulse flex items-center gap-1">● ONLINE</span>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]">
-                {messages.length === 0 && (
-                  <div className="text-center py-12 opacity-30 italic">
-                    <p className="text-xs">Konsultasi strategi trade BTC lo sekarang...</p>
-                  </div>
-                )}
-                {messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[85%] p-3 rounded-lg text-xs font-medium leading-relaxed ${m.role === "user" ? "bg-accent/20 text-white border border-accent/30 rounded-tr-none" : "bg-trading-panel text-slate-300 border border-trading-border rounded-tl-none"}`}>
-                      <Markdown remarkPlugins={[remarkGfm]}>{m.content}</Markdown>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="p-4 bg-trading-panel border-t border-trading-border">
-                <form 
-                  onSubmit={(e) => { e.preventDefault(); handleChat(); }}
-                  className="flex gap-2"
-                >
-                  <input
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder="Tanya soal trade ini..."
-                    className="flex-1 bg-trading-bg border border-trading-border rounded-md px-3 py-2 text-xs text-white focus:outline-none focus:border-accent/50"
-                  />
-                  <button type="submit" className="p-2 bg-accent text-black rounded-md hover:bg-bull transition-colors">
-                    <TrendingUp size={16} />
-                  </button>
-                </form>
-              </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Desktop Collaboration / Chat Panel (Floating Toggle) */}
-      <div className="hidden lg:flex fixed bottom-4 right-4 z-[100] flex flex-col items-end gap-2">
-        <AnimatePresence>
-          {chatOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: 20, scale: 0.9 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 20, scale: 0.9 }}
-              className="w-80 h-96 bg-trading-panel border border-trading-border rounded-xl shadow-2xl flex flex-col overflow-hidden mb-2"
-            >
-              <div className="p-3 border-b border-trading-border bg-accent/5 flex justify-between items-center">
-                <span className="text-[10px] font-black text-white flex items-center gap-2 tracking-widest"><MessageSquare size={12}/> CONSULT ANALYST</span>
-                <button onClick={() => setChatOpen(false)} className="text-slate-500 hover:text-white"><ChevronDown size={16} /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]">
-                {messages.length === 0 && (
-                  <p className="text-[10px] text-slate-600 text-center mt-10 uppercase tracking-tighter">No active session</p>
-                )}
-                {messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[90%] p-2 rounded text-[11px] leading-tight ${m.role === 'user' ? 'bg-accent/10 border border-accent/20 text-white' : 'bg-slate-800 text-slate-300'}`}>
-                      <Markdown>{m.content}</Markdown>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="p-2 bg-trading-bg border-t border-trading-border flex gap-2">
-                <input 
-                  type="text" 
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleChat()}
-                  placeholder="Ask advisor..."
-                  className="flex-1 bg-trading-panel border border-trading-border rounded px-2 py-1.5 text-[11px] focus:outline-none focus:border-accent"
-                />
-                <button onClick={handleChat} className="bg-accent p-1.5 rounded text-white shadow-lg"><Zap size={14} /></button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <button 
-          onClick={() => setChatOpen(!chatOpen)}
-          className="w-12 h-12 rounded-full bg-accent text-white flex items-center justify-center shadow-2xl transition-transform active:scale-90 hover:shadow-accent/40"
-        >
-          {chatOpen ? <ChevronDown size={24} /> : <MessageSquare size={24} />}
-        </button>
-      </div>
 
       {/* Footer Utility */}
       <footer className="h-6 bg-white/[0.02] border-t border-white/[0.05] flex items-center px-4 text-[8px] font-mono tracking-widest text-slate-600 uppercase">
